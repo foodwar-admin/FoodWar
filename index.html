@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Food War - Prototype v1</title>
+<style>
+  body { font-family: Arial, sans-serif; background:#1c1c1c; color:#eee; margin:0; padding:16px; }
+  #header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:15px; }
+  .scoreBox { padding:4px 10px; border-radius:6px; font-weight:bold; }
+  .scoreA { background:#2b5a8c; }
+  .scoreB { background:#8c2b2b; }
+  #board { background:#262626; border-radius:8px; width:100%; max-width:920px; display:block; margin:0 auto; }
+  .node circle { cursor:pointer; }
+  .nodeLabel { fill:#fff; font-size:11px; text-anchor:middle; pointer-events:none; }
+  .valid circle { stroke:#ffd54a; stroke-width:3; }
+  #hands { display:flex; justify-content:space-between; max-width:920px; margin:14px auto; gap:20px; }
+  .handBox { flex:1; background:#262626; border-radius:8px; padding:10px; }
+  .handTitle { font-size:13px; opacity:0.7; margin-bottom:6px; }
+  .card { display:inline-block; background:#3a3a3a; border:2px solid #555; border-radius:6px; padding:6px 10px; margin:3px; cursor:pointer; font-size:14px; }
+  .card.selected { border-color:#ffd54a; background:#4a4a2a; }
+  .card.unplayable { opacity:0.35; }
+  .card { display:inline-block; vertical-align:top; width:150px; box-sizing:border-box; }
+  .cardName { font-weight:bold; font-size:14px; }
+  .cardDesc { font-size:11px; line-height:1.3; opacity:0.8; margin-top:4px; }
+  #legend { max-width:920px; margin:10px auto; background:#262626; border-radius:8px; padding:8px 12px; font-size:13px; }
+  #legend summary { cursor:pointer; font-weight:bold; }
+  #legend table { border-collapse:collapse; width:100%; margin-top:8px; }
+  #legend td { padding:4px 8px; border-top:1px solid #3a3a3a; vertical-align:top; }
+  #legend .rule { margin-top:8px; opacity:0.75; font-size:12px; line-height:1.5; }
+  .cardBack { display:inline-block; background:#333; border:2px dashed #555; border-radius:6px; padding:6px 12px; margin:3px; font-size:14px; color:#777; }
+  #controls { max-width:920px; margin:10px auto; text-align:center; }
+  button { background:#444; color:#eee; border:1px solid #666; border-radius:6px; padding:8px 16px; cursor:pointer; font-size:14px; }
+  button:hover { background:#555; }
+  #log { max-width:920px; margin:10px auto; background:#1a1a1a; border-radius:6px; padding:8px 12px; font-size:12px; max-height:110px; overflow-y:auto; }
+  #overlay { position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10; }
+  #overlay h1 { font-size:28px; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div>Tour actuel : <b id="turnLabel">Joueur A</b></div>
+  <div>
+    <span class="scoreBox scoreA">A : <span id="scoreA">0</span> pts</span>
+    <span class="scoreBox scoreB">B : <span id="scoreB">0</span> pts</span>
+  </div>
+</div>
+
+<svg id="board" viewBox="0 0 920 480"></svg>
+
+<div id="hands">
+  <div class="handBox">
+    <div class="handTitle">Main - Joueur A <span id="countA"></span></div>
+    <div id="handA"></div>
+  </div>
+  <div class="handBox">
+    <div class="handTitle">Main - Joueur B <span id="countB"></span></div>
+    <div id="handB"></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="passBtn">Passer le tour (piocher 2 cartes)</button>
+  <button id="autoPlayBtn" style="margin-left:10px;">▶️ Lancer l'IA auto</button>
+  <select id="aiModeSelect" style="margin-left:8px; background:#333; color:#eee; border:1px solid #666; border-radius:6px; padding:6px;">
+    <option value="random">IA aléatoire</option>
+    <option value="heuristic">IA heuristique</option>
+  </select>
+  <span id="deckCount" style="margin-left:14px; opacity:0.7;"></span>
+  <span id="gamesPlayedCount" style="margin-left:14px; opacity:0.7;"></span>
+  <span id="winTallyDisplay" style="margin-left:14px; opacity:0.9; font-weight:bold;"></span>
+  <div id="statusMsg" style="margin-top:8px; color:#ffd54a; font-weight:bold;"></div>
+</div>
+
+<details id="legend" open>
+  <summary>📖 Cartes &amp; pouvoirs</summary>
+  <table id="legendTable"></table>
+  <div class="rule">
+    Poser une carte : sur une case vide ou adverse, adjacente à ta zone connectée à ta base. Recouvrir : valeur strictement supérieure (y compris sur ta propre carte).
+    Si la carte du dessus est retirée, celle du dessous reprend le contrôle. Toucher la base adverse = victoire. Passer = piocher 2 cartes.
+    Un territoire conquis est verrouillé définitivement. Victoire à 17 pts de territoire.
+  </div>
+</details>
+
+<div id="log"></div>
+
+<div style="position:relative;">
+  <div id="overlay">
+    <h1 id="overlayTitle"></h1>
+    <p id="overlayText"></p>
+    <button onclick="location.reload()">Rejouer</button>
+  </div>
+</div>
+
+<script>
+const CARD_TYPES = [
+  {value:1, name:'Tomate', emoji:'🍅', effect:'tomate', desc:'Recouvre tout (même un 8), mais tout la recouvre (même un 1).'},
+  {value:2, name:'Frite', emoji:'🍟', effect:'draw2', desc:'À la pose : pioche 2 cartes.'},
+  {value:3, name:'Piment', emoji:'🌶️', effect:'removeAdjacent', desc:'À la pose : retire une carte adverse adjacente, sans condition de valeur.'},
+  {value:4, name:'Burger', emoji:'🍔', effect:'burger', desc:'Ne peut être recouvert que par une carte de valeur +2 minimum (6 ou plus) ou une Tomate.'},
+  {value:5, name:'Glace', emoji:'🍦', effect:'freePlacement', desc:'Se pose n\'importe où (sauf les bases), sans connexion requise.'},
+  {value:6, name:'Pizza', emoji:'🍕', effect:'extraTurn', desc:'À la pose : rejoue immédiatement un tour supplémentaire.'},
+  {value:7, name:'Œuf', emoji:'🍳', effect:'draw1', desc:'À la pose : pioche 1 carte.'},
+  {value:8, name:'Chef', emoji:'👨‍🍳', effect:'discardRandom', desc:'À la pose : l\'adversaire défausse une carte au hasard de sa main.'},
+];
+
+const NODES = {
+  A:  {x:60,  y:240, type:'base', owner:'A'},
+  B:  {x:860, y:240, type:'base', owner:'B'},
+  U1: {x:160, y:140}, U2: {x:280, y:140}, U3: {x:400, y:140}, U4: {x:520, y:140}, U5: {x:640, y:140}, U6: {x:760, y:140},
+  L1: {x:160, y:340}, L2: {x:280, y:340}, L3: {x:400, y:340}, L4: {x:520, y:340}, L5: {x:640, y:340}, L6: {x:760, y:340},
+  Xtop: {x:460, y:70},
+  Xbot: {x:460, y:430},
+};
+
+const EDGES = [
+  ['A','U1'],['A','L1'],
+  ['U1','U2'],['U2','U3'],['U3','U4'],['U4','U5'],['U5','U6'],['U6','B'],
+  ['L1','L2'],['L2','L3'],['L3','L4'],['L4','L5'],['L5','L6'],['L6','B'],
+  ['U1','L1'],['U2','L2'],['U3','L3'],['U4','L4'],['U5','L5'],['U6','L6'],
+  ['U3','Xtop'],['Xtop','U4'],
+  ['L3','Xbot'],['Xbot','L4'],
+];
+
+const TERRITORIES = [
+  {id:'T1', nodes:['A','U1','L1'], points:3},
+  {id:'R12', nodes:['U1','U2','L2','L1'], points:4},
+  {id:'R23', nodes:['U2','U3','L3','L2'], points:4},
+  {id:'Tmid', nodes:['U3','U4','L4','L3'], points:4},
+  {id:'TriTop', nodes:['U3','Xtop','U4'], points:3},
+  {id:'TriBot', nodes:['L3','Xbot','L4'], points:3},
+  {id:'R45', nodes:['U4','U5','L5','L4'], points:4},
+  {id:'R56', nodes:['U5','U6','L6','L5'], points:4},
+  {id:'T6', nodes:['U6','B','L6'], points:3},
+];
+
+const TERRITORY_THRESHOLD = 17;
+
+function neighbors(nodeId){
+  const result = [];
+  for(const [a,b] of EDGES){
+    if(a===nodeId) result.push(b);
+    if(b===nodeId) result.push(a);
+  }
+  return result;
+}
+
+function buildDeck(){
+  const deck = [];
+  let uid = 0;
+  for(const type of CARD_TYPES){
+    for(let i=0;i<3;i++){
+      deck.push({uid: uid++, value: type.value, name: type.name, emoji: type.emoji, effect: type.effect, desc: type.desc});
+    }
+  }
+  return deck;
+}
+
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+
+// ---- Game state ----
+let decks = { A: shuffle(buildDeck()), B: shuffle(buildDeck()) };
+decks.A.splice(0,5); // 5 cartes retirées aléatoirement du paquet de A, jamais révélées
+decks.B.splice(0,5); // 5 cartes retirées aléatoirement du paquet de B, jamais révélées
+let hands = { A: decks.A.splice(0,4), B: decks.B.splice(0,4) };
+let board = {}; // nodeId -> stack [{owner,value,name,emoji}]
+let current = 'A';
+let selectedIndex = null;
+let gameOver = false;
+let logMessages = [];
+
+function log(msg){
+  logMessages.unshift(msg);
+  if(logMessages.length>30) logMessages.pop();
+  document.getElementById('log').innerHTML = logMessages.map(m => '<div>'+m+'</div>').join('');
+}
+
+function isControlled(nodeId, player){
+  const n = NODES[nodeId];
+  if(n.type==='base') return n.owner===player;
+  const st = board[nodeId];
+  return !!(st && st.length && st[st.length-1].owner===player);
+}
+
+function controlledReachable(player){
+  const baseId = player;
+  const visited = new Set([baseId]);
+  const queue = [baseId];
+  while(queue.length){
+    const n = queue.shift();
+    for(const nb of neighbors(n)){
+      if(!visited.has(nb) && isControlled(nb, player)){
+        visited.add(nb);
+        queue.push(nb);
+      }
+    }
+  }
+  return visited;
+}
+
+function validTargets(player){
+  const reachable = controlledReachable(player);
+  const targets = new Set();
+  for(const n of reachable){
+    if(n !== player) targets.add(n); // ta propre base (id 'A' ou 'B') reste exclue, le reste de tes cases peut être reciblé
+    for(const nb of neighbors(n)){
+      if(!reachable.has(nb)) targets.add(nb);
+    }
+  }
+  return targets;
+}
+
+function isLegalPlacement(nodeId, player, card){
+  const n = NODES[nodeId];
+  if(n.type==='base' && n.owner!==player) return true; // atteindre la base adverse = victoire
+  if(n.type==='base' && n.owner===player) return false;
+  const st = board[nodeId];
+  if(!st || st.length===0) return true; // case vide
+  const top = st[st.length-1];
+  if(card.effect==='tomate') return true; // Tomate recouvre tout, même un 8
+  if(top.effect==='tomate') return true; // Tomate est recouvrable par tout, même un 1
+  if(top.effect==='burger') return card.value >= top.value + 2; // Burger : +2 minimum requis
+  return card.value > top.value; // règle standard, y compris pour recouvrir sa propre carte
+}
+
+// Calcule les cases ciblables pour UNE carte donnée, en tenant compte de son effet
+function getTargetsForCard(player, card){
+  if(card.effect==='freePlacement'){
+    // Glace : cibles normales (zone connectée, base adverse incluse si un chemin existe réellement)
+    const targets = new Set([...validTargets(player)].filter(nid => isLegalPlacement(nid, player, card)));
+    // + bonus sans connexion sur tout le plateau, MAIS jamais une base via ce bonus seul
+    for(const nid of Object.keys(NODES)){
+      if(NODES[nid].type==='base') continue;
+      if(isLegalPlacement(nid, player, card)) targets.add(nid);
+    }
+    return [...targets];
+  }
+  // cas standard (y compris Piment et Chef, qui se posent normalement) : cible adjacente
+  // à la zone connectée, et recouvrement légal
+  return [...validTargets(player)].filter(nid => isLegalPlacement(nid, player, card));
+}
+
+function canPlay(player){
+  if(hands[player].length===0) return false;
+  return hands[player].some(card => cardHasTarget(player, card));
+}
+
+function cardHasTarget(player, card){
+  return getTargetsForCard(player, card).length > 0;
+}
+
+let territoryOwner = {}; // une fois conquis, un territoire est verrouillé pour toute la partie
+
+function updateTerritories(){
+  for(const terr of TERRITORIES){
+    if(territoryOwner[terr.id]) continue; // déjà verrouillé, on ne le réévalue plus jamais
+    let owner = null;
+    let consistent = true;
+    for(const nodeId of terr.nodes){
+      const n = NODES[nodeId];
+      let nodeOwner;
+      if(n.type==='base'){
+        nodeOwner = n.owner;
+      } else {
+        const st = board[nodeId];
+        if(!st || st.length===0){ consistent=false; break; }
+        nodeOwner = st[st.length-1].owner;
+      }
+      if(owner===null) owner = nodeOwner;
+      else if(owner!==nodeOwner){ consistent=false; break; }
+    }
+    if(consistent && owner){
+      territoryOwner[terr.id] = owner;
+      log('🏆 Territoire ' + terr.id + ' (' + terr.points + ' pts) conquis définitivement par le Joueur ' + owner + ' !');
+    }
+  }
+}
+
+function computeScores(){
+  const scores = {A:0, B:0};
+  for(const terr of TERRITORIES){
+    if(territoryOwner[terr.id]) scores[territoryOwner[terr.id]] += terr.points;
+  }
+  return scores;
+}
+
+function otherPlayer(p){ return p==='A' ? 'B' : 'A'; }
+
+let winTally = { A:0, B:0, draw:0 };
+
+function endGame(winner, reason){
+  gameOver = true;
+  if(winner==='A') winTally.A++;
+  else if(winner==='B') winTally.B++;
+  else winTally.draw++;
+  document.getElementById('overlay').style.display = 'flex';
+  document.getElementById('overlayTitle').textContent = winner ? ('Victoire du Joueur ' + winner + ' !') : 'Match nul';
+  document.getElementById('overlayText').textContent = reason;
+}
+
+let pimentPending = null; // {candidates:[nodeIds]} en attente d'un choix de case à vider pour Piment
+
+function finishTurnAfterPlacement(extraTurn){
+  updateTerritories();
+  const scores = computeScores();
+  if(scores[current] >= TERRITORY_THRESHOLD){
+    render();
+    endGame(current, 'Seuil de territoire atteint (' + scores[current] + ' pts).');
+    return;
+  }
+  if(!extraTurn){
+    current = otherPlayer(current);
+  }
+  resolveBlockedTurns();
+  render();
+}
+
+function placeCard(nodeId){
+  if(pimentPending){
+    if(pimentPending.candidates.includes(nodeId)) resolvePimentChoice(nodeId);
+    return;
+  }
+
+  const card = hands[current][selectedIndex];
+  const n = NODES[nodeId];
+
+  if(n.type==='base' && n.owner!==current){
+    log('Joueur ' + current + ' pose ' + card.emoji + ' ' + card.name + ' (' + card.value + ') directement sur la base adverse !');
+    hands[current].splice(selectedIndex,1);
+    endGame(current, 'La base adverse a été atteinte.');
+    render();
+    return;
+  }
+  if(!board[nodeId]) board[nodeId] = [];
+  board[nodeId].push({owner: current, value: card.value, name: card.name, emoji: card.emoji, effect: card.effect});
+  log('Joueur ' + current + ' pose ' + card.emoji + ' ' + card.name + ' (' + card.value + ') sur ' + nodeId);
+  hands[current].splice(selectedIndex,1);
+  selectedIndex = null;
+
+  // Effets déclenchés à la pose (en bonus, la carte est toujours posée sur le plateau)
+  let extraTurn = false;
+  if(card.effect==='draw2'){
+    let drawn=0;
+    for(let i=0;i<2 && decks[current].length>0;i++){ hands[current].push(decks[current].shift()); drawn++; }
+    log('🍟 Frite : Joueur ' + current + ' pioche ' + drawn + ' carte(s) supplémentaire(s).');
+  }
+  if(card.effect==='draw1'){
+    let drawn=0;
+    for(let i=0;i<1 && decks[current].length>0;i++){ hands[current].push(decks[current].shift()); drawn++; }
+    log('🍳 Œuf : Joueur ' + current + ' pioche 1 carte supplémentaire.');
+  }
+  if(card.effect==='extraTurn'){
+    log('🍕 Pizza : Joueur ' + current + ' rejoue immédiatement.');
+    extraTurn = true;
+  }
+  if(card.effect==='discardRandom'){
+    const opponent = otherPlayer(current);
+    if(hands[opponent].length>0){
+      const randIdx = Math.floor(Math.random()*hands[opponent].length);
+      const discarded = hands[opponent].splice(randIdx,1)[0];
+      log('👨‍🍳 Chef : Joueur ' + current + ' fait défausser ' + discarded.emoji + ' ' + discarded.name + ' (' + discarded.value + ') de la main du Joueur ' + opponent + '.');
+    } else {
+      log('👨‍🍳 Chef : la main du Joueur ' + opponent + ' est déjà vide, aucun effet.');
+    }
+  }
+  if(card.effect==='removeAdjacent'){
+    const adjacentEnemies = neighbors(nodeId).filter(nb => {
+      if(NODES[nb].type==='base') return false;
+      const st = board[nb];
+      return st && st.length && st[st.length-1].owner !== current;
+    });
+    if(adjacentEnemies.length===1){
+      const st = board[adjacentEnemies[0]];
+      const removed = st.pop();
+      log('🌶️ Piment : ' + removed.emoji + ' ' + removed.name + ' (' + removed.value + ') retirée de ' + adjacentEnemies[0] + (st.length ? ', la carte dessous reprend le contrôle.' : '.'));
+    } else if(adjacentEnemies.length>1){
+      pimentPending = {candidates: adjacentEnemies};
+      log('🌶️ Piment : plusieurs cartes adverses adjacentes — choisis celle à retirer.');
+      render();
+      return; // on attend le choix du joueur avant de continuer le tour
+    } else {
+      log('🌶️ Piment : aucune carte adverse adjacente à cette case, aucun effet de retrait.');
+    }
+  }
+
+  finishTurnAfterPlacement(extraTurn);
+}
+
+function resolvePimentChoice(nodeId){
+  const st = board[nodeId];
+  const removed = st.pop();
+  log('🌶️ Piment : ' + removed.emoji + ' ' + removed.name + ' (' + removed.value + ') retirée de ' + nodeId + (st.length ? ', la carte dessous reprend le contrôle.' : '.'));
+  pimentPending = null;
+  finishTurnAfterPlacement(false);
+}
+
+function passTurn(){
+  if(gameOver || pimentPending) return;
+  let drawn = 0;
+  for(let i=0;i<2 && decks[current].length>0;i++){
+    hands[current].push(decks[current].shift());
+    drawn++;
+  }
+  log('Joueur ' + current + ' passe son tour et pioche ' + drawn + ' carte(s) dans son propre paquet.');
+  selectedIndex = null;
+  current = otherPlayer(current);
+  resolveBlockedTurns();
+  render();
+}
+
+function isBlocked(player){
+  return decks[player].length===0 && !canPlay(player);
+}
+
+function resolveBlockedTurns(){
+  // Un joueur bloqué (plus de pioche ET plus aucun coup jouable) voit son tour sauté
+  // automatiquement ; l'adversaire enchaîne. Fin de partie seulement si les deux
+  // joueurs sont bloqués en même temps.
+  if(gameOver) return;
+  let safety = 0;
+  while(isBlocked(current) && safety < 4){
+    if(isBlocked(otherPlayer(current))){
+      const scores = computeScores();
+      render();
+      if(scores.A===scores.B){
+        endGame(null, 'Blocage total : plus aucun coup possible pour personne. Égalité territoriale (' + scores.A + ' - ' + scores.B + ').');
+      } else {
+        const w = scores.A > scores.B ? 'A' : 'B';
+        endGame(w, 'Blocage total : plus aucun coup possible. Score final : A=' + scores.A + ', B=' + scores.B + '.');
+      }
+      return;
+    }
+    log('⛔ Joueur ' + current + ' est bloqué (plus de pioche ni de coup possible) — Joueur ' + otherPlayer(current) + ' continue.');
+    current = otherPlayer(current);
+    safety++;
+  }
+}
+
+// ---- Rendering ----
+const svg = document.getElementById('board');
+
+function territoryColor(terr){
+  const owner = territoryOwner[terr.id];
+  if(owner==='A') return 'rgba(60,120,200,0.45)';
+  if(owner==='B') return 'rgba(200,70,70,0.45)';
+  return 'rgba(255,255,255,0.06)';
+}
+
+function render(){
+  document.getElementById('turnLabel').textContent = 'Joueur ' + current;
+  const scores = computeScores();
+  document.getElementById('scoreA').textContent = scores.A;
+  document.getElementById('scoreB').textContent = scores.B;
+  document.getElementById('countA').textContent = '(' + hands.A.length + ' cartes)';
+  document.getElementById('countB').textContent = '(' + hands.B.length + ' cartes)';
+  document.getElementById('deckCount').textContent = 'Pioche A : ' + decks.A.length + ' cartes  |  Pioche B : ' + decks.B.length + ' cartes';
+  document.getElementById('gamesPlayedCount').textContent = autoPlay || gamesPlayed>0 ? '🔁 Parties auto-jouées : ' + gamesPlayed : '';
+  const totalGames = winTally.A + winTally.B + winTally.draw;
+  document.getElementById('winTallyDisplay').textContent = totalGames>0
+    ? '🏆 A : ' + winTally.A + ' (' + Math.round(100*winTally.A/totalGames) + '%)  —  B : ' + winTally.B + ' (' + Math.round(100*winTally.B/totalGames) + '%)  —  Nul : ' + winTally.draw
+    : '';
+  document.getElementById('statusMsg').textContent = pimentPending
+    ? '🌶️ Piment : choisis la carte adverse à retirer (case surlignée).'
+    : ((!gameOver && !canPlay(current)) ? '⚠️ Joueur ' + current + ' : aucune carte en main ne peut être posée en ce moment. Passez le tour.' : '');
+
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+
+  const selectedCard = (gameOver || selectedIndex===null) ? null : hands[current][selectedIndex];
+  const targetSet = new Set(
+    pimentPending ? pimentPending.candidates :
+    (selectedCard ? getTargetsForCard(current, selectedCard) : [])
+  );
+
+  // territories
+  for(const terr of TERRITORIES){
+    const pts = terr.nodes.map(id => NODES[id].x + ',' + NODES[id].y).join(' ');
+    const poly = document.createElementNS(ns,'polygon');
+    poly.setAttribute('points', pts);
+    poly.setAttribute('fill', territoryColor(terr));
+    poly.setAttribute('stroke', 'rgba(255,255,255,0.15)');
+    svg.appendChild(poly);
+    const cx = terr.nodes.reduce((s,id)=>s+NODES[id].x,0)/terr.nodes.length;
+    const cy = terr.nodes.reduce((s,id)=>s+NODES[id].y,0)/terr.nodes.length;
+    const label = document.createElementNS(ns,'text');
+    label.setAttribute('x', cx); label.setAttribute('y', cy);
+    label.setAttribute('class','nodeLabel');
+    label.textContent = terr.points + ' pts';
+    svg.appendChild(label);
+  }
+
+  // edges
+  for(const [a,b] of EDGES){
+    const line = document.createElementNS(ns,'line');
+    line.setAttribute('x1', NODES[a].x); line.setAttribute('y1', NODES[a].y);
+    line.setAttribute('x2', NODES[b].x); line.setAttribute('y2', NODES[b].y);
+    line.setAttribute('stroke', '#666'); line.setAttribute('stroke-width','1.5');
+    svg.appendChild(line);
+  }
+
+  // nodes
+  for(const nodeId in NODES){
+    const n = NODES[nodeId];
+    const g = document.createElementNS(ns,'g');
+    g.setAttribute('class', 'node' + (targetSet.has(nodeId) ? ' valid' : ''));
+
+    const circle = document.createElementNS(ns,'circle');
+    circle.setAttribute('cx', n.x); circle.setAttribute('cy', n.y);
+    let fill = '#444', r = 14;
+    let labelText = '';
+    if(n.type==='base'){
+      r = 20;
+      fill = n.owner==='A' ? '#2b5a8c' : '#8c2b2b';
+      labelText = 'Base ' + n.owner;
+    } else {
+      const st = board[nodeId];
+      if(st && st.length){
+        const top = st[st.length-1];
+        fill = top.owner==='A' ? '#2b5a8c' : '#8c2b2b';
+        labelText = top.emoji + ' ' + top.value;
+      }
+    }
+    circle.setAttribute('r', r);
+    circle.setAttribute('fill', fill);
+    circle.setAttribute('stroke', '#999');
+    circle.setAttribute('stroke-width','1');
+    g.appendChild(circle);
+
+    const label = document.createElementNS(ns,'text');
+    label.setAttribute('x', n.x); label.setAttribute('y', n.y + (n.type==='base'? 34 : 26));
+    label.setAttribute('class','nodeLabel');
+    label.textContent = labelText;
+    g.appendChild(label);
+
+    if(targetSet.has(nodeId)){
+      g.addEventListener('click', () => placeCard(nodeId));
+    }
+    svg.appendChild(g);
+  }
+
+  // hands
+  renderHand('A');
+  renderHand('B');
+}
+
+function renderHand(player){
+  const el = document.getElementById('hand' + player);
+  el.innerHTML = '';
+  if(player !== current){
+    for(let i=0;i<hands[player].length;i++){
+      const back = document.createElement('span');
+      back.className = 'cardBack';
+      back.textContent = '?';
+      el.appendChild(back);
+    }
+    return;
+  }
+  hands[player].forEach((card, idx) => {
+    const playable = cardHasTarget(player, card);
+    const btn = document.createElement('span');
+    btn.className = 'card' + (selectedIndex===idx ? ' selected' : '') + (playable ? '' : ' unplayable');
+    const nameEl = document.createElement('div');
+    nameEl.className = 'cardName';
+    nameEl.textContent = card.emoji + ' ' + card.name + ' (' + card.value + ')';
+    const descEl = document.createElement('div');
+    descEl.className = 'cardDesc';
+    descEl.textContent = card.desc;
+    btn.appendChild(nameEl);
+    btn.appendChild(descEl);
+    btn.addEventListener('click', () => {
+      if(gameOver || pimentPending) return;
+      selectedIndex = (selectedIndex === idx) ? null : idx;
+      render();
+    });
+    el.appendChild(btn);
+  });
+}
+
+document.getElementById('legendTable').innerHTML = CARD_TYPES.map(t =>
+  '<tr><td>' + t.emoji + ' <b>' + t.name + '</b></td><td>' + t.value + '</td><td>' + t.desc + '</td></tr>'
+).join('');
+
+document.getElementById('passBtn').addEventListener('click', passTurn);
+
+// ---- IA aléatoire (stress-test) ----
+let autoPlay = false;
+let gamesPlayed = 0;
+
+function resetGame(){
+  decks = { A: shuffle(buildDeck()), B: shuffle(buildDeck()) };
+  decks.A.splice(0,5);
+  decks.B.splice(0,5);
+  hands = { A: decks.A.splice(0,4), B: decks.B.splice(0,4) };
+  board = {};
+  territoryOwner = {};
+  current = 'A';
+  selectedIndex = null;
+  gameOver = false;
+  pimentPending = null;
+  logMessages = [];
+  document.getElementById('overlay').style.display = 'none';
+  log('Partie commencée. Chaque joueur a son propre paquet de 24 cartes (5 retirées secrètement de chaque côté). Chaque joueur a 4 cartes en main.');
+  render();
+}
+
+function scheduleAutoStep(){
+  if(!autoPlay) return;
+  setTimeout(autoStep, 120);
+}
+
+// ---- IA heuristique ----
+// Combien de points de territoires NON verrouillés contiennent ce nœud (plus haut = plus contesté/précieux)
+function contestedValue(nodeId){
+  let total = 0;
+  for(const terr of TERRITORIES){
+    if(!territoryOwner[terr.id] && terr.nodes.includes(nodeId)) total += terr.points;
+  }
+  return total;
+}
+
+// Si on pose `player` sur nodeId (seul changement), quels territoires seraient verrouillés ce tour-ci ?
+function wouldCompleteTerritories(nodeId, player){
+  const results = [];
+  for(const terr of TERRITORIES){
+    if(territoryOwner[terr.id]) continue;
+    if(!terr.nodes.includes(nodeId)) continue;
+    let owner = null, consistent = true;
+    for(const nid of terr.nodes){
+      let o;
+      if(nid === nodeId){
+        o = player;
+      } else {
+        const n = NODES[nid];
+        if(n.type==='base'){ o = n.owner; }
+        else {
+          const st = board[nid];
+          if(!st || st.length===0){ consistent=false; break; }
+          o = st[st.length-1].owner;
+        }
+      }
+      if(owner===null) owner = o; else if(owner!==o){ consistent=false; break; }
+    }
+    if(consistent && owner===player) results.push(terr);
+  }
+  return results;
+}
+
+const AI_HOLD_VALUE = { tomate:5, burger:3, removeAdjacent:3, freePlacement:4, extraTurn:5, draw2:2, draw1:1, discardRandom:4 };
+
+// Choisit le meilleur (carte, case) selon les priorités : victoire > verrouiller un territoire >
+// recouvrir une carte adverse dans une zone contestée > étendre vers une zone contestée > coup le moins coûteux à garder
+function pickHeuristicMove(player){
+  const enemyBase = otherPlayer(player);
+  let best = null, bestScore = -Infinity;
+  hands[player].forEach((card, idx) => {
+    getTargetsForCard(player, card).forEach(nodeId => {
+      let score;
+      if(nodeId === enemyBase){
+        score = 1000000; // victoire immédiate
+      } else {
+        score = 0;
+        const locked = wouldCompleteTerritories(nodeId, player);
+        if(locked.length) score += 10000 + locked.reduce((s,t)=>s+t.points,0) * 100;
+        const st = board[nodeId];
+        if(st && st.length && st[st.length-1].owner === enemyBase){
+          score += 50 + contestedValue(nodeId) * 5; // recouvrir l'adverse dans une zone contestée
+        } else {
+          score += contestedValue(nodeId) * 2; // étendre vers une zone contestée
+        }
+        score -= (AI_HOLD_VALUE[card.effect] || 0); // garder les cartes fortes sous la main si possible
+        score += Math.random() * 0.5; // départage
+      }
+      if(score > bestScore){ bestScore = score; best = {idx, nodeId}; }
+    });
+  });
+  return best;
+}
+
+// Pour Piment avec plusieurs cibles possibles : retire la carte adverse de plus haute valeur
+function pickHeuristicPimentChoice(candidates){
+  let best = candidates[0], bestVal = -1;
+  for(const nid of candidates){
+    const st = board[nid];
+    const val = st && st.length ? st[st.length-1].value : -1;
+    if(val > bestVal){ bestVal = val; best = nid; }
+  }
+  return best;
+}
+
+function autoStep(){
+  if(!autoPlay) return;
+
+  if(gameOver){
+    gamesPlayed++;
+    log('🔁 Partie #' + gamesPlayed + ' terminée automatiquement — nouvelle partie...');
+    render();
+    setTimeout(() => { resetGame(); scheduleAutoStep(); }, 400);
+    return;
+  }
+
+  const mode = document.getElementById('aiModeSelect').value;
+
+  try{
+    if(pimentPending){
+      const choice = mode==='heuristic'
+        ? pickHeuristicPimentChoice(pimentPending.candidates)
+        : pimentPending.candidates[Math.floor(Math.random()*pimentPending.candidates.length)];
+      resolvePimentChoice(choice);
+      scheduleAutoStep();
+      return;
+    }
+
+    const player = current;
+
+    if(mode==='heuristic'){
+      const move = pickHeuristicMove(player);
+      if(!move){
+        passTurn();
+      } else {
+        selectedIndex = move.idx;
+        placeCard(move.nodeId);
+      }
+    } else {
+      const moves = [];
+      hands[player].forEach((card, idx) => {
+        getTargetsForCard(player, card).forEach(nid => moves.push({idx, nid}));
+      });
+      // 15% de chance de passer volontairement même si des coups existent, pour varier le test
+      if(moves.length===0 || Math.random() < 0.15){
+        passTurn();
+      } else {
+        const move = moves[Math.floor(Math.random()*moves.length)];
+        selectedIndex = move.idx;
+        placeCard(move.nid);
+      }
+    }
+    scheduleAutoStep();
+  } catch(e){
+    autoPlay = false;
+    document.getElementById('autoPlayBtn').textContent = "▶️ Lancer l'IA auto";
+    log('❌ ERREUR détectée pendant l\'auto-jeu, arrêt automatique : ' + e.message);
+    console.error(e);
+    render();
+  }
+}
+
+document.getElementById('autoPlayBtn').addEventListener('click', () => {
+  autoPlay = !autoPlay;
+  document.getElementById('autoPlayBtn').textContent = autoPlay ? "⏹ Arrêter l'IA auto" : "▶️ Lancer l'IA auto";
+  if(autoPlay) scheduleAutoStep();
+  render();
+});
+
+log('Partie commencée. Chaque joueur a son propre paquet de 24 cartes (5 retirées secrètement de chaque côté). Chaque joueur a 4 cartes en main.');
+render();
+</script>
+</body>
+</html>
